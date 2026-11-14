@@ -115,7 +115,8 @@ class VolminiApp:
         pad_left = max(10, int(round(sheet_w * left_ratio * 0.65)))
         pad_right = max(10, int(round(sheet_w * right_ratio * 0.65)))
         content_w = max(120, sheet_w - pad_left - pad_right)
-        max_cols_fit = max(28, min(96, (content_w - 8) // 6))
+        max_cols_fit = max(24, min(96, (content_w - 6) // 6))
+        self.layout_model.content_width_px = content_w
         self.layout_model.viewport_scale_cols = max_cols_fit
 
     def set_toast(self, msg: str, duration_ms: int = 3500) -> None:
@@ -564,17 +565,17 @@ class VolminiApp:
             self.doc.move_end()
             self.relayout()
         elif k == KeyCode.UP:
-            if self.doc.cursor_para > 0:
-                self.doc.cursor_para -= 1
-                self.doc._clamp_cursor()
-                self.doc._sync_active_format()
-                self.relayout()
+            self._move_cursor_visual_line(-1)
+            self.relayout()
         elif k == KeyCode.DOWN:
-            if self.doc.cursor_para < len(self.doc.paragraphs) - 1:
-                self.doc.cursor_para += 1
-                self.doc._clamp_cursor()
-                self.doc._sync_active_format()
-                self.relayout()
+            self._move_cursor_visual_line(1)
+            self.relayout()
+        elif k == KeyCode.PAGE_UP:
+            self._move_cursor_visual_line(-10)
+            self.relayout()
+        elif k == KeyCode.PAGE_DOWN:
+            self._move_cursor_visual_line(10)
+            self.relayout()
         elif k == KeyCode.BACKSPACE:
             self.doc.backspace()
             self.relayout()
@@ -589,6 +590,30 @@ class VolminiApp:
             total_w = len(self.doc.to_plain_text().split())
             self.corvus.on_keystroke(self.doc.current_paragraph.text, total_w)
             self.relayout()
+
+    def _move_cursor_visual_line(self, delta: int) -> None:
+        """Moves cursor up or down across wrapped visual lines (both within and across paragraphs)."""
+        flat_lines = []
+        for p_idx, page in enumerate(self.pages):
+            for l_idx, ln in enumerate(page.lines):
+                flat_lines.append((p_idx, l_idx, ln))
+        if not flat_lines:
+            return
+
+        cur_page, cur_line, cur_col = self.cursor_loc
+        cur_flat_idx = 0
+        for i, (pi, li, _) in enumerate(flat_lines):
+            if pi == cur_page and li == cur_line:
+                cur_flat_idx = i
+                break
+
+        target_idx = max(0, min(len(flat_lines) - 1, cur_flat_idx + delta))
+        _, _, target_ln = flat_lines[target_idx]
+        self.doc.cursor_para = target_ln.para_idx
+        line_len = len(target_ln.text)
+        self.doc.cursor_offset = target_ln.char_start + min(cur_col, line_len)
+        self.doc._clamp_cursor()
+        self.doc._sync_active_format()
 
     def _handle_launcher_key(self, ev: KeyEvent) -> None:
         if ev.key == KeyCode.ESC:

@@ -184,9 +184,12 @@ class PageRenderer:
                 is_i = span.italic or force_italic
                 is_u = span.underline or force_underline
                 for ch in span.text:
+                    adv = CHAR_ADVANCE + (1 if is_b else 0)
+                    if draw_x + adv > content_right:
+                        break
                     if l_idx == line_idx_in_page and char_cursor_in_line == col_in_line:
                         cursor_px_x = draw_x
-                    adv = draw_char(
+                    draw_char(
                         fb, ch, draw_x, curr_y,
                         color=0, bold=is_b, italic=is_i, underline=is_u, scale_y=scale_y
                     )
@@ -205,7 +208,9 @@ class PageRenderer:
                     char_x_positions.append(draw_x)
 
             if l_idx == line_idx_in_page and col_in_line >= char_cursor_in_line:
-                cursor_px_x = draw_x
+                cursor_px_x = min(draw_x, content_right - 2)
+            else:
+                cursor_px_x = min(cursor_px_x, content_right - 2)
 
             if ln.style == "title" and ln.text:
                 fb.hline(start_x, curr_y + row_h - 2, min(content_w, line_px_w), 0)

@@ -102,11 +102,13 @@ class PageLayoutModel:
         orientation: str = Orientation.PORTRAIT,
         margins: PageMargins = None,
         viewport_scale_cols: int = 80,
+        content_width_px: int = 316,
     ):
         self.paper_size = paper_size if paper_size in PAPER_DIMENSIONS_INCHES else PaperSizePreset.LETTER
         self.orientation = orientation
         self.margins = margins or PageMargins.normal()
         self.viewport_scale_cols = int(viewport_scale_cols)
+        self.content_width_px = int(content_width_px)
 
     @property
     def raw_dimensions_inches(self):
@@ -128,8 +130,9 @@ class PageLayoutModel:
     @property
     def printable_cols(self) -> int:
         """Exact character columns across a physical line for the selected paper, margins, and display."""
-        raw_cols = max(24, int(round(self.printable_width_inches * CHARS_PER_INCH_H)))
-        return min(raw_cols, max(24, self.viewport_scale_cols))
+        raw_cols = max(20, int(round(self.printable_width_inches * CHARS_PER_INCH_H)))
+        px_cols = max(20, (self.content_width_px - 6) // 6)
+        return min(raw_cols, max(20, self.viewport_scale_cols), px_cols)
 
     @property
     def printable_lines_per_page(self) -> int:

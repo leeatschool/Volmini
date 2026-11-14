@@ -1,12 +1,14 @@
 """Print-accurate pagination and line-wrapping engine for Volmini.
 
 Slices a RichDocument into physical PageSheets matching the selected
-PageLayoutModel (PaperSizePreset, Orientation, PageMargins) and HeaderFooterModel.
+PageLayoutModel (PaperSizePreset, Orientation, PageMargins) and HeaderFooterModel,
+strictly enforcing the right-hand margin in both character columns and pixel width.
 """
 
 from volmini.core.document_model import PageLayoutModel
 from volmini.core.header_footer import HeaderFooterModel
-from volmini.core.rich_doc import RichDocument, Paragraph, TextSpan
+from volmini.core.rich_doc import RichDocument, Paragraph
+from volmini.ui.font5x8 import CHAR_ADVANCE
 
 
 class LayoutLine:
@@ -69,11 +71,12 @@ class PrintPaginationEngine:
         story_author: str = "",
     ) -> list:
         max_cols = layout.printable_cols
+        max_width_px = getattr(layout, "content_width_px", max_cols * CHAR_ADVANCE)
         max_lines_per_page = layout.printable_lines_per_page
 
         all_wrapped_lines = []
         for p_idx, para in enumerate(doc.paragraphs):
-            p_lines = cls._wrap_paragraph(p_idx, para, max_cols)
+            p_lines = cls._wrap_paragraph(p_idx, para, max_cols, max_width_px)
             if para.page_break_before and p_lines:
                 p_lines[0]._force_page_break = True
             all_wrapped_lines.extend(p_lines)
@@ -128,45 +131,116 @@ class PrintPaginationEngine:
         return pages
 
     @classmethod
-    def _wrap_paragraph(cls, para_idx: int, para: Paragraph, max_cols: int) -> list:
-        """Word-wraps a single paragraph according to its style and column width."""
-        eff_cols = max_cols
+    def _wrap_paragraph(
+        cls, para_idx: int, para: Paragraph, max_cols: int, max_width_px: int = None
+    ) -> list:
+        """Word-wraps a single paragraph strictly within both `max_cols` and `max_width_px`."""
+        eff_cols = max(12, max_cols)
         line_cost = 1
         if para.style == "title":
-            eff_cols = max(16, int(max_cols * 0.75))
+            eff_cols = max(12, int(max_cols * 0.78))
             line_cost = 2
         elif para.style == "h1":
-            eff_cols = max(18, int(max_cols * 0.85))
+            eff_cols = max(14, int(max_cols * 0.85))
             line_cost = 2
         elif para.style in ("h2", "h3"):
-            eff_cols = max(20, int(max_cols * 0.92))
+            eff_cols = max(16, int(max_cols * 0.90))
             line_cost = 1
         elif para.style == "quote":
-            eff_cols = max(16, max_cols - 6)
+            eff_cols = max(12, max_cols - 4)
+
+        if max_width_px is None:
+            max_width_px = eff_cols * CHAR_ADVANCE
+
+        indent_px = 12 if para.style == "quote" else 0
+        # Reserve 6px on the right so the 2px cursor caret never crosses the right margin tick
+        avail_px = max(72, max_width_px - indent_px - 6)
+        force_bold = para.style in ("title", "h1", "h2", "h3")
 
         text = para.text
         if not text:
             return [LayoutLine(para_idx, 0, 0, [], para.style, para.align, line_cost, True)]
 
-        lines = []
+        # Precompute per-character pixel advance (6px normal, 7px bold)
         n = len(text)
+        char_adv = [CHAR_ADVANCE] * n
+        pos_cursor = 0
+        for s in para.spans:
+            adv = CHAR_ADVANCE + (1 if (s.bold or force_bold) else 0)
+            s_len = len(s.text)
+            for idx in range(pos_cursor, min(n, pos_cursor + s_len)):
+                char_adv[idx] = adv
+            pos_cursor += s_len
+
+        lines = []
         pos = 0
         first = True
 
         while pos < n:
-            if pos + eff_cols >= n:
+            px_sum = 0
+            col_count = 0
+            idx = pos
+            last_space_at = -1
+            saw_non_space = False
+
+            while idx < n:
+                nxt_adv = char_adv[idx]
+                if col_count + 1 > eff_cols or px_sum + nxt_adv > avail_px:
+                    break
+                ch = text[idx]
+                if ch == " ":
+                    if saw_non_space:
+                        last_space_at = idx
+                else:
+                    saw_non_space = True
+                px_sum += nxt_adv
+                col_count += 1
+                idx += 1
+
+            if idx == n:
                 end = n
             else:
-                # Find last space within eff_cols
-                window = text[pos:pos + eff_cols + 1]
-                space_idx = window.rfind(" ")
-                if space_idx > 0:
-                    end = pos + space_idx + 1
+                # We hit the right-hand limit before the end of the paragraph
+                if text[idx] == " ":
+                    # Consume the space at the wrap boundary as the break delimiter
+                    end = idx + 1
+                    if end == n:
+                        # User typed a space right at the right margin: wrap cursor to new empty line
+                        spans = para.slice_spans(pos, idx)
+                        lines.append(
+                            LayoutLine(
+                                para_idx=para_idx,
+                                char_start=pos,
+                                char_end=idx,
+                                spans=spans,
+                                style=para.style,
+                                align=para.align,
+                                line_cost=line_cost,
+                                is_first_of_para=first,
+                            )
+                        )
+                        lines.append(
+                            LayoutLine(
+                                para_idx=para_idx,
+                                char_start=idx,
+                                char_end=n,
+                                spans=[],
+                                style=para.style,
+                                align=para.align,
+                                line_cost=line_cost,
+                                is_first_of_para=False,
+                            )
+                        )
+                        break
+                elif last_space_at >= pos:
+                    # Break after the last space that fit within the line
+                    end = last_space_at + 1
                 else:
-                    end = pos + eff_cols
+                    # Continuous unbroken word/spaces wider than the line: hard-break at margin
+                    end = max(pos + 1, idx)
 
             spans = para.slice_spans(pos, end)
-            # Trim trailing space on wrapped lines (unless at very end of paragraph)
+            # Trim trailing space on wrapped lines (when another wrapped line follows)
             if end < n and spans and spans[-1].text.endswith(" "):
                 spans[-1].text = spans[-1].text[:-1]
                 if not spans[-1].text:
@@ -195,11 +269,14 @@ class PrintPaginationEngine:
         for p_idx, page in enumerate(pages):
             for l_idx, ln in enumerate(page.lines):
                 if ln.para_idx == cursor_para:
-                    # Check if cursor falls on this wrapped line
                     is_last_line_of_para = True
                     if l_idx + 1 < len(page.lines) and page.lines[l_idx + 1].para_idx == cursor_para:
                         is_last_line_of_para = False
-                    elif p_idx + 1 < len(pages) and pages[p_idx + 1].lines and pages[p_idx + 1].lines[0].para_idx == cursor_para:
+                    elif (
+                        p_idx + 1 < len(pages)
+                        and pages[p_idx + 1].lines
+                        and pages[p_idx + 1].lines[0].para_idx == cursor_para
+                    ):
                         is_last_line_of_para = False
 
                     if ln.char_start <= cursor_offset < ln.char_end or (

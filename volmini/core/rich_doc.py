@@ -557,7 +557,7 @@ class RichDocument:
                 if s.underline:
                     t = f"__{t}__"
                 if s.bold and s.italic:
-                    t = f"***{t}***"
+                    t = f"**_{t}_**"
                 elif s.bold:
                     t = f"**{t}**"
                 elif s.italic:
@@ -616,17 +616,17 @@ class RichDocument:
 
     @staticmethod
     def _parse_inline_markdown(text: str) -> list:
-        """Parses ***bold-italic***, **bold**, __underline__, and *italic* into TextSpans."""
+        """Parses **_bold-italic_**, ***bold-italic***, **bold**, __underline__, and *italic* into TextSpans."""
         if not text:
             return []
-        token_re = re.compile(r"(\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*)")
+        token_re = re.compile(r"(\*\*_[^_]+_\*\*|\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*)")
         spans = []
         pos = 0
         for m in token_re.finditer(text):
             if m.start() > pos:
                 spans.append(TextSpan(text[pos:m.start()]))
             tok = m.group(0)
-            if tok.startswith("***") and tok.endswith("***"):
+            if (tok.startswith("**_") and tok.endswith("_**")) or (tok.startswith("***") and tok.endswith("***")):
                 spans.append(TextSpan(tok[3:-3], bold=True, italic=True))
             elif tok.startswith("**") and tok.endswith("**"):
                 spans.append(TextSpan(tok[2:-2], bold=True))

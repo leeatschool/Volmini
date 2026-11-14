@@ -455,3 +455,46 @@ def test_usb_hid_and_60pct_keyboard_decoder():
     # 4. ANSI / UART Escape stream (Up arrow + Alt+3 -> F3_REFERENCE)
     ansi_evs = dec.decode_ansi_stream(b"\x1b[A\x1b3Hi")
     assert [e.key for e in ansi_evs] == [KeyCode.UP, KeyCode.F3_REFERENCE, "H", "i"]
+
+
+def test_strict_right_hand_margin_wrapping_and_visual_line_navigation(tmp_path):
+    from volmini.ui.font5x8 import measure_spans_px
+
+    for profile in ("sharp_400x240", "gdey075t7_800x480"):
+        hal = DesktopHAL(display_profile=profile, storage_root=str(tmp_path / profile))
+        app = VolminiApp(hal)
+        app.run_boot_sequence(interactive_wait=False)
+
+        # Clear document and type long bold text, normal text, and unbroken text without manual newlines
+        app.doc.clear()
+        app.doc.toggle_bold()
+        long_bold = (
+            "Hello, my name is Aaron Lee and this is a continuous bold paragraph typed without "
+            "pressing Enter so that we can verify it strictly wraps at the right-hand page margin."
+        )
+        for ch in long_bold:
+            app.handle_key_event(KeyEvent(ch, ch))
+
+        app.doc.split_paragraph()
+        app.doc.toggle_bold()
+        unbroken = "M" * 140
+        for ch in unbroken:
+            app.handle_key_event(KeyEvent(ch, ch))
+
+        app.render()
+
+        # Verify every wrapped line stays strictly within content_width_px
+        max_px = app.layout_model.content_width_px
+        page = app.pages[0]
+        assert len(page.lines) >= 5
+        for ln in page.lines:
+            force_b = ln.style in ("title", "h1", "h2", "h3")
+            indent_px = 12 if ln.style == "quote" else 0
+            w_px = indent_px + measure_spans_px(ln.spans, force_bold=force_b)
+            assert w_px <= max_px, f"Line overflowed right margin: {w_px}px > {max_px}px ({ln.text!r})"
+
+        # Verify UP arrow moves up one visual wrapped line within the same multi-line paragraph
+        _, line_before, _ = app.cursor_loc
+        app.handle_key_event(KeyEvent(KeyCode.UP))
+        _, line_after, _ = app.cursor_loc
+        assert line_after == line_before - 1
